@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { BookOpen, GraduationCap, RotateCcw, CheckCircle2, XCircle, ChevronRight, Award, List, ArrowLeft, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { BookOpen, GraduationCap, RotateCcw, CheckCircle2, XCircle, ChevronRight, Award, List, ArrowLeft, ArrowRight, Search, Plus, Trash2, X } from 'lucide-react';
 import { wordDatabase } from './wordData';
 
 
@@ -79,7 +79,11 @@ export default function App() {
   // 学習データ（localStorageに永続化）
   const [wrongWords, setWrongWords] = useState(() => loadFromStorage('eiken_wrongWords', []));
   const [learnedStatus, setLearnedStatus] = useState(() => loadFromStorage('eiken_learnedStatus', {})); // { [id]: 'correct' | 'wrong' }
+  const [customWords, setCustomWords] = useState(() => loadFromStorage('eiken_customWords', [])); // ユーザー追加単語
   const [isHintMode, setIsHintMode] = useState(false);
+
+  // 全単語（標準1500 + ユーザー追加）
+  const allWords = useMemo(() => [...wordDatabase, ...customWords], [customWords]);
 
   // クイズ画面のステート
   const [isFlipped, setIsFlipped] = useState(false);
@@ -94,6 +98,10 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('eiken_learnedStatus', JSON.stringify(learnedStatus)); } catch {}
   }, [learnedStatus]);
+
+  useEffect(() => {
+    try { localStorage.setItem('eiken_customWords', JSON.stringify(customWords)); } catch {}
+  }, [customWords]);
 
   // 初期化・モード切替
   const startQuiz = (sourceList, isReview = false, hintMode = false) => {
@@ -122,11 +130,11 @@ export default function App() {
 
   // 選択肢の生成
   const generateOptions = (correctWord) => {
-    const wrongOptions = wordDatabase
+    const wrongOptions = allWords
       .filter(w => w.id !== correctWord.id)
       .sort(() => 0.5 - Math.random())
       .slice(0, 3);
-    
+
     const allOptions = [...wrongOptions, correctWord].sort(() => 0.5 - Math.random());
     setOptions(allOptions);
   };
@@ -185,7 +193,7 @@ export default function App() {
 
   const Home = () => {
     const learnedCount = Object.values(learnedStatus).filter(s => s === 'correct').length;
-    const totalCount = wordDatabase.length;
+    const totalCount = allWords.length;
     const progressPct = totalCount > 0 ? (learnedCount / totalCount) * 100 : 0;
     return (
     <div className="flex flex-col items-center justify-center min-h-[80vh] space-y-6 px-4 py-8">
@@ -223,7 +231,7 @@ export default function App() {
 
       <div className="w-full max-w-md space-y-4">
         <button
-          onClick={() => startQuiz(wordDatabase)}
+          onClick={() => startQuiz(allWords)}
           className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-2xl shadow-lg transform transition active:scale-95 flex items-center justify-between group"
         >
           <div className="flex items-center space-x-3">
@@ -234,7 +242,7 @@ export default function App() {
         </button>
 
         <button
-          onClick={() => startQuiz(wordDatabase, false, true)}
+          onClick={() => startQuiz(allWords, false, true)}
           className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 px-6 rounded-2xl shadow-lg transform transition active:scale-95 flex items-center justify-between group"
         >
           <div className="flex items-center space-x-3">
@@ -259,13 +267,16 @@ export default function App() {
           <ChevronRight className={`w-5 h-5 opacity-70 ${wrongWords.length > 0 ? 'group-hover:opacity-100 group-hover:translate-x-1' : ''} transition-all`} />
         </button>
 
-        <button 
+        <button
           onClick={() => setMode('practice')}
           className="w-full bg-teal-500 hover:bg-teal-600 text-white font-bold py-4 px-6 rounded-2xl shadow-lg transform transition active:scale-95 flex items-center justify-between group"
         >
           <div className="flex items-center space-x-3">
             <BookOpen className="w-6 h-6" />
-            <span className="text-lg">練習モード（一覧学習）</span>
+            <div className="text-left">
+              <div className="text-lg">単語辞書 ({totalCount}語)</div>
+              <div className="text-xs opacity-80 font-normal">検索・索引・単語追加</div>
+            </div>
           </div>
           <ChevronRight className="w-5 h-5 opacity-70 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
         </button>
@@ -466,79 +477,206 @@ export default function App() {
   };
 
   const PracticeMode = () => {
-    const [selectedCategory, setSelectedCategory] = useState('All');
-    
-    const categories = ['All', ...new Set(wordDatabase.map(w => w.category))];
-    const displayWords = selectedCategory === 'All' 
-      ? wordDatabase 
-      : wordDatabase.filter(w => w.category === selectedCategory);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [selectedLetter, setSelectedLetter] = useState('All');
+    const [expandedId, setExpandedId] = useState(null);
+    const [showAddForm, setShowAddForm] = useState(false);
+    const [newWord, setNewWord] = useState({ word: '', translation: '', coreImage: '', etymology: '', example: '', category: 'カスタム' });
+
+    const letters = ['All', '#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')];
+
+    const filtered = useMemo(() => {
+      const q = searchQuery.trim().toLowerCase();
+      return allWords.filter(w => {
+        const matchSearch = !q ||
+          w.word.toLowerCase().includes(q) ||
+          (w.translation || '').toLowerCase().includes(q);
+        let matchLetter = true;
+        if (selectedLetter !== 'All') {
+          const firstChar = (w.word || '').charAt(0).toUpperCase();
+          if (selectedLetter === '#') {
+            matchLetter = !/[A-Z]/.test(firstChar);
+          } else {
+            matchLetter = firstChar === selectedLetter;
+          }
+        }
+        return matchSearch && matchLetter;
+      }).sort((a, b) => a.word.localeCompare(b.word));
+    }, [searchQuery, selectedLetter]);
+
+    const handleAddWord = () => {
+      if (!newWord.word.trim() || !newWord.translation.trim()) {
+        alert('単語と日本語訳は必須です');
+        return;
+      }
+      const maxId = allWords.reduce((m, w) => Math.max(m, w.id || 0), 0);
+      const entry = {
+        id: maxId + 1,
+        word: newWord.word.trim(),
+        translation: newWord.translation.trim(),
+        coreImage: newWord.coreImage.trim() || '（コアイメージ未登録）',
+        etymology: newWord.etymology.trim() || '（語源未登録）',
+        example: newWord.example.trim() || '',
+        category: 'カスタム',
+        isCustom: true,
+      };
+      setCustomWords(prev => [...prev, entry]);
+      setNewWord({ word: '', translation: '', coreImage: '', etymology: '', example: '', category: 'カスタム' });
+      setShowAddForm(false);
+    };
+
+    const handleDeleteCustom = (id) => {
+      if (window.confirm('この単語を削除しますか？')) {
+        setCustomWords(prev => prev.filter(w => w.id !== id));
+      }
+    };
 
     return (
-      <div className="max-w-4xl mx-auto px-4 py-8">
-        <div className="flex items-center justify-between mb-8">
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        {/* ヘッダー */}
+        <div className="flex items-center justify-between mb-4">
           <button onClick={() => setMode('home')} className="flex items-center text-blue-600 font-bold hover:text-blue-800">
             <ArrowLeft className="w-5 h-5 mr-1" /> 戻る
           </button>
-          <h2 className="text-2xl font-extrabold text-gray-800 flex items-center">
+          <h2 className="text-xl md:text-2xl font-extrabold text-gray-800 flex items-center">
             <BookOpen className="w-6 h-6 mr-2 text-teal-500" />
-            練習モード
+            単語辞書
           </h2>
+          <button
+            onClick={() => setShowAddForm(true)}
+            className="flex items-center bg-teal-500 hover:bg-teal-600 text-white font-bold py-2 px-3 rounded-lg shadow-sm text-sm"
+          >
+            <Plus className="w-4 h-4 mr-1" /> 追加
+          </button>
         </div>
 
-        {/* カテゴリフィルター */}
-        <div className="flex overflow-x-auto pb-4 mb-6 space-x-2 snap-x hide-scrollbar">
-          {categories.map(cat => (
+        {/* 検索バー */}
+        <div className="relative mb-4">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <input
+            type="text"
+            placeholder="英単語または日本語で検索..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-gray-200 focus:border-teal-400 focus:outline-none text-base"
+          />
+        </div>
+
+        {/* A-Z 索引 */}
+        <div className="flex overflow-x-auto pb-3 mb-3 gap-1 hide-scrollbar">
+          {letters.map(letter => (
             <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              className={`snap-center shrink-0 px-4 py-2 rounded-full font-bold text-sm transition ${
-                selectedCategory === cat ? 'bg-teal-500 text-white shadow-md' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+              key={letter}
+              onClick={() => setSelectedLetter(letter)}
+              className={`shrink-0 w-9 h-9 rounded-lg font-bold text-sm transition ${
+                selectedLetter === letter ? 'bg-teal-500 text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
               }`}
             >
-              {cat}
+              {letter}
             </button>
           ))}
         </div>
 
-        {/* 単語リスト */}
-        <div className="space-y-6">
-          {displayWords.map(word => {
-            const status = learnedStatus[word.id]; // 'correct' | 'wrong' | undefined
-            const borderColor = status === 'correct' ? 'border-green-400' : status === 'wrong' ? 'border-red-400' : 'border-gray-300';
+        <div className="text-xs font-bold text-gray-500 mb-3">
+          {filtered.length} 件 / 全{allWords.length}語
+        </div>
+
+        {/* コンパクトな単語リスト */}
+        <div className="space-y-1.5">
+          {filtered.length === 0 ? (
+            <div className="text-center py-12 text-gray-400">該当する単語が見つかりません</div>
+          ) : filtered.map(word => {
+            const status = learnedStatus[word.id];
+            const expanded = expandedId === word.id;
             return (
-            <div key={word.id} className={`bg-white rounded-2xl shadow-md p-6 border-l-8 ${borderColor} flex flex-col md:flex-row gap-6`}>
-              <div className="md:w-1/3 flex flex-col justify-center">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs font-bold text-teal-500 uppercase tracking-wider">{word.category}</span>
-                  {status === 'correct' && (
-                    <span className="text-xs font-bold bg-green-100 text-green-700 px-2 py-0.5 rounded-full">✓ 学習済</span>
-                  )}
-                  {status === 'wrong' && (
-                    <span className="text-xs font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded-full">✗ 復習中</span>
-                  )}
-                  {!status && (
-                    <span className="text-xs font-bold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">未学習</span>
-                  )}
-                </div>
-                <h3 className="text-3xl font-extrabold text-gray-800">{word.word}</h3>
-                <p className="text-lg font-bold text-gray-600 mt-1">{word.translation}</p>
+              <div
+                key={word.id}
+                className={`bg-white rounded-xl shadow-sm border-l-4 transition ${
+                  status === 'correct' ? 'border-green-400' : status === 'wrong' ? 'border-red-400' : 'border-gray-200'
+                }`}
+              >
+                <button
+                  onClick={() => setExpandedId(expanded ? null : word.id)}
+                  className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 text-left"
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    {status === 'correct' && <span className="text-green-500 shrink-0">✓</span>}
+                    {status === 'wrong' && <span className="text-red-500 shrink-0">✗</span>}
+                    {!status && <span className="text-gray-300 shrink-0">○</span>}
+                    <span className="font-bold text-gray-800 text-base">{word.word}</span>
+                    {word.isCustom && <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">追加</span>}
+                    <span className="text-gray-600 text-sm truncate">{word.translation}</span>
+                  </div>
+                  <ChevronRight className={`w-4 h-4 text-gray-400 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                </button>
+                {expanded && (
+                  <div className="px-4 pb-4 pt-1 border-t border-gray-100 bg-gray-50">
+                    <div className="text-xs font-bold text-teal-500 uppercase tracking-wider mb-2 mt-2">{word.category}</div>
+                    <div className="bg-white p-3 rounded-lg mb-2 border border-teal-100">
+                      <p className="text-xs font-bold text-teal-600 mb-1 flex items-center">
+                        <Award className="w-3 h-3 mr-1" /> コアイメージ
+                      </p>
+                      <p className="text-sm text-gray-800">{word.coreImage}</p>
+                    </div>
+                    <div className="space-y-1 text-sm">
+                      <p><span className="font-bold text-gray-700">【語源】</span> <span className="text-gray-600">{word.etymology}</span></p>
+                      {word.example && <p><span className="font-bold text-gray-700">【例文】</span> <span className="text-gray-600">{word.example}</span></p>}
+                    </div>
+                    {word.isCustom && (
+                      <button
+                        onClick={() => handleDeleteCustom(word.id)}
+                        className="mt-3 flex items-center text-xs text-red-500 hover:text-red-700 font-bold"
+                      >
+                        <Trash2 className="w-3 h-3 mr-1" /> この単語を削除
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-              <div className="md:w-2/3 space-y-3 bg-gray-50 p-4 rounded-xl">
-                <div>
-                  <p className="text-sm font-bold text-teal-600 mb-1 flex items-center">
-                    <List className="w-4 h-4 mr-1" /> コアイメージ
-                  </p>
-                  <p className="font-medium text-gray-800">{word.coreImage}</p>
-                </div>
-                <div className="text-sm text-gray-600 pt-2 border-t border-gray-200">
-                  <p className="mb-1"><span className="font-semibold text-gray-700">【語源】</span> {word.etymology}</p>
-                  <p><span className="font-semibold text-gray-700">【例文】</span> {word.example}</p>
-                </div>
-              </div>
-            </div>
             );
           })}
         </div>
+
+        {/* 単語追加モーダル */}
+        {showAddForm && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4" onClick={() => setShowAddForm(false)}>
+            <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-gray-100 sticky top-0 bg-white">
+                <h3 className="text-lg font-extrabold text-gray-800">単語を追加</h3>
+                <button onClick={() => setShowAddForm(false)} className="text-gray-400 hover:text-gray-600">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-5 space-y-4">
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">英単語 <span className="text-red-500">*</span></label>
+                  <input type="text" value={newWord.word} onChange={(e) => setNewWord({...newWord, word: e.target.value})} placeholder="例: serendipity" className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-teal-400 focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">日本語訳 <span className="text-red-500">*</span></label>
+                  <input type="text" value={newWord.translation} onChange={(e) => setNewWord({...newWord, translation: e.target.value})} placeholder="例: 偶然の幸運な発見" className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-teal-400 focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">コアイメージ</label>
+                  <textarea value={newWord.coreImage} onChange={(e) => setNewWord({...newWord, coreImage: e.target.value})} placeholder="例: 思いがけず良いものを見つける感覚" rows={2} className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-teal-400 focus:outline-none resize-none" />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">語源</label>
+                  <input type="text" value={newWord.etymology} onChange={(e) => setNewWord({...newWord, etymology: e.target.value})} placeholder="例: スリランカの古名Serendipに由来" className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-teal-400 focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">例文</label>
+                  <input type="text" value={newWord.example} onChange={(e) => setNewWord({...newWord, example: e.target.value})} placeholder="例: A serendipity led to the discovery." className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-teal-400 focus:outline-none" />
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <button onClick={() => setShowAddForm(false)} className="flex-1 py-3 rounded-xl border-2 border-gray-200 font-bold text-gray-700 hover:bg-gray-50">キャンセル</button>
+                  <button onClick={handleAddWord} className="flex-1 py-3 rounded-xl bg-teal-500 hover:bg-teal-600 font-bold text-white shadow-md">追加する</button>
+                </div>
+                <p className="text-xs text-gray-500 text-center">追加した単語はテストにも自動で出題されます</p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
