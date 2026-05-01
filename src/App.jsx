@@ -61,18 +61,39 @@ const Confetti = () => {
   return <canvas ref={canvasRef} className="fixed inset-0 pointer-events-none z-50" />;
 };
 
+// localStorage 安全読み出しヘルパー
+const loadFromStorage = (key, defaultValue) => {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : defaultValue;
+  } catch {
+    return defaultValue;
+  }
+};
+
 export default function App() {
   const [mode, setMode] = useState('home'); // home, quiz, practice, result
   const [quizQuestions, setQuizQuestions] = useState([]);
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [score, setScore] = useState(0);
-  const [wrongWords, setWrongWords] = useState([]); // { wordObj, mistaken: boolean } のリスト
-  const [isHintMode, setIsHintMode] = useState(false); // ヒント表示モード（コアイメージ・語源を表面に表示）
+  // 学習データ（localStorageに永続化）
+  const [wrongWords, setWrongWords] = useState(() => loadFromStorage('eiken_wrongWords', []));
+  const [learnedStatus, setLearnedStatus] = useState(() => loadFromStorage('eiken_learnedStatus', {})); // { [id]: 'correct' | 'wrong' }
+  const [isHintMode, setIsHintMode] = useState(false);
 
   // クイズ画面のステート
   const [isFlipped, setIsFlipped] = useState(false);
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [options, setOptions] = useState([]);
+
+  // 永続化: 値が変わるたびにlocalStorageへ保存
+  useEffect(() => {
+    try { localStorage.setItem('eiken_wrongWords', JSON.stringify(wrongWords)); } catch {}
+  }, [wrongWords]);
+
+  useEffect(() => {
+    try { localStorage.setItem('eiken_learnedStatus', JSON.stringify(learnedStatus)); } catch {}
+  }, [learnedStatus]);
 
   // 初期化・モード切替
   const startQuiz = (sourceList, isReview = false, hintMode = false) => {
@@ -114,23 +135,37 @@ export default function App() {
   const handleAnswerClick = (option) => {
     if (selectedAnswer) return; // 既に解答済みの場合は無視
 
-    const isCorrect = option.id === quizQuestions[currentQIndex].id;
+    const currentWord = quizQuestions[currentQIndex];
+    const isCorrect = option.id === currentWord.id;
     setSelectedAnswer(option);
-    
+
     if (isCorrect) {
       setScore(s => s + 1);
+      // 学習済みに記録
+      setLearnedStatus(prev => ({ ...prev, [currentWord.id]: 'correct' }));
+      // 復習リストにあれば削除（再度正解できたので卒業）
+      setWrongWords(prev => prev.filter(w => w.id !== currentWord.id));
     } else {
       // 間違えたリストに追加（重複チェック）
-      const currentWord = quizQuestions[currentQIndex];
       if (!wrongWords.some(w => w.id === currentWord.id)) {
         setWrongWords(prev => [...prev, currentWord]);
       }
+      setLearnedStatus(prev => ({ ...prev, [currentWord.id]: 'wrong' }));
     }
 
     // すぐにフリップして解説を見せる
     setTimeout(() => {
       setIsFlipped(true);
     }, 500);
+  };
+
+  // クイズ中にホームへ戻る（確認あり）
+  const handleQuitQuiz = () => {
+    if (window.confirm('テストを中断してホームに戻りますか？\n（解答済みの記録は保持されます）')) {
+      setMode('home');
+      setIsFlipped(false);
+      setSelectedAnswer(null);
+    }
   };
 
   // 次の問題へ
@@ -148,13 +183,42 @@ export default function App() {
 
   // --- 画面コンポーネント ---
 
-  const Home = () => (
-    <div className="flex flex-col items-center justify-center min-h-[80vh] space-y-8 px-4">
+  const Home = () => {
+    const learnedCount = Object.values(learnedStatus).filter(s => s === 'correct').length;
+    const totalCount = wordDatabase.length;
+    const progressPct = totalCount > 0 ? (learnedCount / totalCount) * 100 : 0;
+    return (
+    <div className="flex flex-col items-center justify-center min-h-[80vh] space-y-6 px-4 py-8">
       <div className="text-center">
         <h1 className="text-4xl md:text-5xl font-extrabold text-blue-900 mb-4 tracking-tight">
           CoreWord <span className="text-blue-600">Master</span>
         </h1>
         <p className="text-gray-600 font-medium">英検2級 - 語源とコアイメージで本質から理解する</p>
+      </div>
+
+      {/* 学習統計 */}
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-md p-5 border border-gray-100">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-sm font-bold text-gray-600">学習進捗</span>
+          <span className="text-sm font-bold text-blue-600">{learnedCount} / {totalCount}</span>
+        </div>
+        <div className="w-full bg-gray-200 rounded-full h-2 mb-3">
+          <div className="bg-gradient-to-r from-blue-500 to-green-500 h-2 rounded-full transition-all duration-700" style={{ width: `${progressPct}%` }}></div>
+        </div>
+        <div className="flex justify-around text-xs font-bold pt-1">
+          <div className="text-center">
+            <div className="text-green-600 text-lg">{learnedCount}</div>
+            <div className="text-gray-500">✓ 正解済</div>
+          </div>
+          <div className="text-center">
+            <div className="text-red-500 text-lg">{wrongWords.length}</div>
+            <div className="text-gray-500">✗ 復習中</div>
+          </div>
+          <div className="text-center">
+            <div className="text-gray-400 text-lg">{totalCount - learnedCount - wrongWords.length}</div>
+            <div className="text-gray-500">未学習</div>
+          </div>
+        </div>
       </div>
 
       <div className="w-full max-w-md space-y-4">
@@ -207,7 +271,8 @@ export default function App() {
         </button>
       </div>
     </div>
-  );
+    );
+  };
 
   const Quiz = () => {
     const currentWord = quizQuestions[currentQIndex];
@@ -215,6 +280,17 @@ export default function App() {
 
     return (
       <div className="max-w-2xl mx-auto px-4 py-8 flex flex-col min-h-[80vh]">
+        {/* ホームに戻るボタン */}
+        <div className="mb-3">
+          <button
+            onClick={handleQuitQuiz}
+            className="flex items-center text-sm font-bold text-gray-500 hover:text-gray-800 transition"
+          >
+            <ArrowLeft className="w-4 h-4 mr-1" />
+            ホームに戻る
+          </button>
+        </div>
+
         {/* プログレスバー */}
         <div className="mb-6">
           <div className="flex justify-between text-sm font-bold text-gray-500 mb-2">
@@ -426,10 +502,24 @@ export default function App() {
 
         {/* 単語リスト */}
         <div className="space-y-6">
-          {displayWords.map(word => (
-            <div key={word.id} className="bg-white rounded-2xl shadow-md p-6 border-l-8 border-teal-400 flex flex-col md:flex-row gap-6">
+          {displayWords.map(word => {
+            const status = learnedStatus[word.id]; // 'correct' | 'wrong' | undefined
+            const borderColor = status === 'correct' ? 'border-green-400' : status === 'wrong' ? 'border-red-400' : 'border-gray-300';
+            return (
+            <div key={word.id} className={`bg-white rounded-2xl shadow-md p-6 border-l-8 ${borderColor} flex flex-col md:flex-row gap-6`}>
               <div className="md:w-1/3 flex flex-col justify-center">
-                <span className="text-xs font-bold text-teal-500 uppercase tracking-wider mb-1">{word.category}</span>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs font-bold text-teal-500 uppercase tracking-wider">{word.category}</span>
+                  {status === 'correct' && (
+                    <span className="text-xs font-bold bg-green-100 text-green-700 px-2 py-0.5 rounded-full">✓ 学習済</span>
+                  )}
+                  {status === 'wrong' && (
+                    <span className="text-xs font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded-full">✗ 復習中</span>
+                  )}
+                  {!status && (
+                    <span className="text-xs font-bold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">未学習</span>
+                  )}
+                </div>
                 <h3 className="text-3xl font-extrabold text-gray-800">{word.word}</h3>
                 <p className="text-lg font-bold text-gray-600 mt-1">{word.translation}</p>
               </div>
@@ -446,7 +536,8 @@ export default function App() {
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
